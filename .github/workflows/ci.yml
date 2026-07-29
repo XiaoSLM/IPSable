@@ -1,0 +1,92 @@
+name: IPSable CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-natives:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust GNU host toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-01-29-x86_64-pc-windows-gnu
+
+      - name: Install rust-mingw component
+        run: rustup component add rust-mingw --toolchain nightly-2026-01-29-x86_64-pc-windows-gnu
+
+      - name: Install llvm-tools component
+        run: rustup component add llvm-tools --toolchain nightly-2026-01-29-x86_64-pc-windows-gnu
+
+      - name: Build natives (Windows DLL)
+        run: powershell -ExecutionPolicy Bypass -File .\natives\build-windows.ps1
+
+      - name: Verify DLL
+        run: |
+          if (-not (Test-Path "src/main/resources/natives_ipl/sable_rapier_x86_64_windows.dll")) {
+            throw "Native DLL not found after build!"
+          }
+          Write-Output "Native DLL verified successfully"
+
+      - name: Stage DLL to project root
+        run: Copy-Item src/main/resources/natives_ipl/sable_rapier_x86_64_windows.dll . -Force
+
+      - name: Upload natives artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: natives-windows-x86_64
+          path: sable_rapier_x86_64_windows.dll
+          retention-days: 7
+
+  build:
+    needs: build-natives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Download natives DLL
+        uses: actions/download-artifact@v4
+        with:
+          name: natives-windows-x86_64
+          path: .
+
+      - name: Build with Gradle
+        run: ./gradlew build --no-daemon
+
+      - name: Upload mod artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod-jar
+          path: build/libs/
+          retention-days: 7
+
+  format-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-01-29
+          components: rustfmt
+
+      - name: Check Rust formatting
+        run: cd natives && cargo fmt -- --check
